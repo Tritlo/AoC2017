@@ -10,6 +10,7 @@ import Text.Read hiding (get, choice, )
 import Text.Printf
 import Data.Char
 import Control.Arrow
+import Data.List
 
 -- While loops
 import Data.Monoid
@@ -72,16 +73,17 @@ hexDist (lat, lon) = max alon alat
     where alon = abs lon
           alat = abs lat
 
-
+solve1 :: [Dir] -> Int
 solve1 = hexDist . coords
 parse = read @[Dir] . printf "[%s]"
 
 -- Part 2
-
+-- Probably very slow, but does the job and I'm in a rush :)
+solve2 = maximum . map solve1 . inits
 
 main :: IO ()
 -- main = print $ map (id &&& (hexDist . coords . parse) &&& (coords . parse)) tests
-main = solve . parse . head <$> readInput >>= print
+main = solve2 . parse . head <$> readInput >>= print
 
 
 
