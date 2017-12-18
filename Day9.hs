@@ -1,7 +1,4 @@
 {-# LANGUAGE TypeApplications #-}
--- While loops
-import Data.Monoid
-import Control.Monad
 
 import Text.ParserCombinators.ReadP
 import Debug.Trace
@@ -9,6 +6,9 @@ import Text.Printf
 
 import Data.List
 
+-- While loops
+import Data.Monoid
+import Control.Monad
 while :: Monad m => (a -> Bool) -> m a -> m [a]
 while cond act = act >>= rec
     where rec a | cond a = flip ((<$>) . (<>) . pure) (while cond act) a
