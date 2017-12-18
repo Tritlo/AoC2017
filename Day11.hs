@@ -78,7 +78,8 @@ solve1 = hexDist . coords
 parse = read @[Dir] . printf "[%s]"
 
 -- Part 2
--- Probably very slow, but does the job and I'm in a rush :)
+-- Probably very slow, but does the job. We could do this faster
+-- with a Dynamic Programming approach for better complexity.
 solve2 = maximum . map solve1 . inits
 
 main :: IO ()
