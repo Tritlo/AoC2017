@@ -53,8 +53,8 @@ parseProgram =
 
 pipeMap :: [Program] -> Map Int (Set Int)
 pipeMap = foldl f M.empty
-  where  f :: Map Int (Set Int) -> Program -> Map Int (Set Int)
-           f m (P pid s) = M.insert pid s m
+  where f :: Map Int (Set Int) -> Program -> Map Int (Set Int)
+        f m (P pid s) = M.insert pid s m
 
 updSet :: Set Int -> Map Int (Set Int) -> Set Int
 updSet curr m = if (S.size ns) == (S.size curr) then curr else updSet ns m
