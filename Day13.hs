@@ -1,12 +1,12 @@
 {-# LANGUAGE TypeApplications #-}
 
 import Text.ParserCombinators.ReadP
+import Data.Char
 import Text.Read hiding (get, choice, )
 
 import Text.Printf
 import Data.Maybe (fromJust)
 import Control.Arrow
-import Data.Char
 
 import qualified Data.Map.Strict as M
 import Data.Map.Strict (Map)
