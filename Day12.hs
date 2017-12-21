@@ -1,12 +1,12 @@
 {-# LANGUAGE TypeApplications #-}
+module Day12 where
 
 import Text.ParserCombinators.ReadP
 import Text.Read hiding (get, choice, )
 
 import Text.Printf
 
--- While loops
-import Data.Monoid
+
 import Control.Monad
 import Control.Arrow
 
@@ -19,15 +19,6 @@ import Debug.Trace
 
 import Data.Maybe (fromJust)
 import Control.Arrow
-
-while :: Monad m => (a -> Bool) -> m a -> m [a]
-while cond act = act >>= rec
-    where rec a | cond a = flip ((<$>) . (<>) . pure) (while cond act) a
-          rec _  = pure mempty
-
-readInput :: IO [String]
-readInput = while (/= "") getLine
-
 
 data Program = P Int (Set Int)
 
@@ -82,5 +73,3 @@ countComponents pipeM = go allPos 0
           where anyEl = S.elemAt 0 unchecked
                 group = component anyEl pipeM
 
-main :: IO ()
-main = (S.size . component 0 &&& countComponents) . pipeMap . map read <$> readInput >>= print
