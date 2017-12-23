@@ -12,7 +12,7 @@ import Debug.Trace
 import Text.Printf
 
 parseInt :: ReadP Int
-parseInt = read @Int <$> many1 (satisfy isDigit)
+parseInt = read @Int <$> many1 (satisfy (\x -> isDigit x || (x == '-')))
 
 while :: Monad m => (a -> Bool) -> m a -> m [a]
 while cond act = act >>= rec
