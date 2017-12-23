@@ -12,7 +12,9 @@ import Data.Array
 import Data.Ix
 import Data.Char
 
-import Data.Sequence (Seq(..), Seq, (|>))
+import Control.Arrow
+
+import Data.Sequence (Seq(..), Seq, (|>), (<|))
 import qualified Data.Sequence as Sq
 
 import Data.Maybe (fromMaybe, isJust)
@@ -84,22 +86,26 @@ parseIns = choice [ uncurry Isnd <$> uniOp "snd"
                   ]
 
 data Env = Env { env :: IntMap Int
-               , sound :: Seq Int
+               , sound :: Maybe Int
                , sent :: Int
                , recv ::  Maybe Int
                , instr :: Int
                , pid :: Int
+               , sendsTo :: [Int]
+               , getsFrom :: Int
                , waiting :: Bool} deriving (Show)
+initEnv :: Env
+initEnv = Env M.empty Nothing 0 Nothing 0 0 [0] 0 False
 
 val :: Env -> Either Int Reg -> Int
 val _ (Left i) = i
 val e (Right c) = fromMaybe 0 $ c `M.lookup` (env e)
 
 eval :: Ins -> Env -> Env
-eval (Isnd _ v) e = e {sound = (sound e)|>(val e v), sent = (sent e) + 1}
+eval (Isnd _ v) e = e {sound = Just nv, sent = (sent e) + 1}
+  where nv = val e v
 eval (Ircv _ v) e | val e v == 0 = e
-eval (Ircv _ v) e = e {recv = Just lst }
-  where (hd:|>lst) = (sound e)
+eval (Ircv _ v) e = e {recv = (sound e) }
 eval (Iset _ reg v) e = e {env = M.insert reg nv (env e)}
   where nv = (val e v)
 eval (Iadd _ reg v) e = e {env = M.insert reg nv (env e)}
@@ -111,8 +117,6 @@ eval (Imod _ reg v) e = e {env = M.insert reg nv (env e)}
 eval (Ijgz _ reg v) e | (val e (Right reg)) > 0 = e {instr = (instr e) + (val e v) -1}
 eval (Ijgz _ reg v) e = e
 
-incr :: Env -> Env
-incr e = e {instr = (instr e) + 1, waiting = False}
 
 runProgramTillRecv :: Array Int Ins -> Env -> Env
 runProgramTillRecv instrs env | (not . null) (recv env) = env
@@ -126,50 +130,133 @@ runProgramTillRecv instrs env =
           -- traceShowId $
           (instrs ! (instr env))
 
-initEnv :: Env
-initEnv = Env M.empty Sq.empty 0 Nothing 0 0 False
 
-eP :: Array Int Ins -> Int -> Array Int Env -> Array Int Env
-eP instrs pid envs = evalP pid  ins envs
-  where ins = instrs ! (instr $ (envs ! pid))
 
-evalP :: Int -> Ins -> Array Int Env -> Array Int Env
-evalP pid (Ircv _ (Right reg)) envs =
-  if (null . sound) $ nextEnv then envs // [(pid, waitingEnv)]
-   else array b [(pid, rcvdEnv), (nextPid, sentEnv)]
-  where b = bounds envs
-        nextPid = if pid == 0 then 1 else 0
-        curEnv = envs ! pid
-        nextEnv = envs ! nextPid
+eP :: Array Int Ins -> Int -> State -> State
+eP instrs pid s@(es, inb) =
+ -- (traceShowId $ traceShow (pid, ins)) $
+  evalP pid ins s
+  where ins = instrs ! (instr $ (es !!! pid))
+
+
+type Inboxes = (Seq Int, Seq Int, Seq Int)
+type Envs = (Env, Env, Env)
+type State = (Envs, Inboxes)
+
+addSend :: Env -> Env
+addSend e = e {sent = (sent e) + 1}
+
+execRecv :: Int -> Ins -> State -> State
+execRecv pid i@(Ircv _ (Right reg)) (envs, inbs) =
+  if (null $ inbs !!! pid) then ( (waitingEnv >!! pid) envs, inbs)
+  else ((rcvEnv >!! pid) envs,  ((Sq.deleteAt 0) >!> pid) inbs)
+  where curEnv = envs !!! pid
         waitingEnv = curEnv { waiting = True }
-        (ini:|>lst) = sound nextEnv
-        sentEnv = nextEnv { sound = ini}
-        rcvdEnv = incr $ curEnv { env = M.insert reg lst (env curEnv) }
-evalP !pid !ins !envs = envs // [(pid, incr $ eval ins (envs ! pid))]
+        rcvEnv = incr $ curEnv {env = M.insert reg ((inbs !!! pid) `Sq.index` 0) (env curEnv)}
+
+execSend :: Int -> Ins -> State -> State
+execSend pid (Isnd _ v) (envs, inbs) = (((incr . addSend) >!> pid) envs,  ninbs)
+  where ce = envs !!! pid
+        sv = (val ce v)
+        md = (|>sv)
+        adjusts [] = inbs
+        adjusts [0] = ((|>sv) >!> 0) inbs
+        adjusts [1,2] = (((|> sv) >!> 1) . ((|>sv) >!> 2)) inbs
+        ninbs = adjusts (sendsTo ce)
+        -- adjusts = map ((|>sv) >!>) (sendsTo ce)
+        -- applAll :: [a -> a] -> a -> a
+        -- applAll [] a = a
+        -- applAll (f:fs) a = applAll fs (f a)
+        -- ninbs = applAll adjusts inbs
+
+incr :: Env -> Env
+incr e = e {instr = (instr e) + 1, waiting = False}
+
+evalP :: Int -> Ins ->  State -> State
+evalP pid i@(Ircv _ _) s = execRecv pid i s
+evalP pid i@(Isnd _ _) s = execSend pid i s
+evalP pid ins s@(es, inbs) = (((incr . eval ins) >!> pid) es, inbs)
+
+{-# INLINE (>!>) #-}
+(>!>) :: (a -> a) -> Int -> (a, a, a) -> (a, a, a)
+(>!>) f 0 (a, b, c) = (f a, b, c)
+(>!>) f 1 (a, b, c) = (a, f b, c)
+(>!>) f 2 (a, b, c) = (a, b, f c)
+
+{-# INLINE (>!!) #-}
+(>!!) ::  a -> Int -> (a, a, a) -> (a, a, a)
+(>!!) a 0 (_, b, c) = (a, b, c)
+(>!!) b 1 (a, _, c) = (a, b, c)
+(>!!) c 2 (a, b, _) = (a, b, c)
+
+{-# INLINE (!!!) #-}
+(!!!) :: (a, a, a) -> Int -> a
+(!!!) (a, _, _) 0  = a
+(!!!) (_, b, _) 1 = b
+(!!!) (_, _, c) 2 = c
+
+isDone :: Int -> (Int, Int) -> Envs -> Bool
+isDone pid bs = (not . inRange bs) . instr . (!!! pid)
+
+isWaiting :: Int -> Envs -> Bool
+isWaiting pid = waiting . (!!! pid)
+
+hasData :: Int -> Inboxes -> Bool
+hasData pid = not . null . (!!! pid)
 
 
-isDone :: Int -> (Int, Int) -> Array Int Env -> Bool
-isDone pid bs = (not . inRange bs) . instr . (! pid)
-isWaiting :: Int -> Array Int Env -> Bool
-isWaiting pid = waiting . ( ! pid)
-hasData :: Int -> Array Int Env -> Bool
-hasData pid = not . null . sound . ( ! pid)
-
-runPrograms :: Array Int Ins -> Array Int Env -> Array Int Env
-runPrograms instrs !envs | not ((isWaiting 0 envs) || isDone 0 (bounds instrs) envs) = runPrograms instrs $ eP instrs 0 envs
-runPrograms instrs !envs | not ((isWaiting 1 envs) || isDone 1 (bounds instrs) envs) = runPrograms instrs $ eP instrs 1 envs
-runPrograms instrs !envs | (hasData 0 envs) = runPrograms instrs $ eP instrs 1 envs
-runPrograms instrs !envs | (hasData 1 envs) = runPrograms instrs $ eP instrs 0 envs
+-- Add a "run until send?" to make the memory pressure smaller.
+runPrograms :: Array Int Ins -> State -> State
+runPrograms instrs !st@(es, _)   | isDone 2 (bounds instrs) es = st
+runPrograms instrs !st@(es, ibs) | isWaiting 2 es = case ruHd 2 instrs st of
+                                                      Left nst -> runPrograms instrs $ eP instrs 2 $
+                                                        --traceShowId
+                                                        nst
+                                                      Right bst -> bst
+runPrograms instrs !st = runPrograms instrs $
+  -- traceShowId $
+  eP instrs 2 st
 
 toArr :: [a] -> Array Int a
 toArr l = listArray (0, length  l - 1) l
 
+
+
+pid0 =   initEnv { env = M.singleton (ord 'p') 0, sendsTo = [1,2], getsFrom = 1 }
+pid1 =   initEnv { env = M.singleton (ord 'p') 1, sendsTo = [0],   getsFrom = 0 }
+pidObs = initEnv { env = M.singleton (ord 'p') 1, sendsTo = [],    getsFrom = 0}
+
+
+canWork :: Int -> (Int, Int) -> Envs -> Bool
+canWork n b es = not (isDone n b es || isWaiting n es)
+
+ruHd :: Int -> Array Int Ins -> State -> Either State State
+ruHd n is !st@(_, ibs) | (hasData n ibs) = Left st
+ruHd n is !st@(es, _) | (isDone gf (bounds is) es) = Right st
+  where gf = getsFrom (es !!! n)
+ruHd n is !st@(es, _) | (isWaiting gf es) && (isWaiting gf2 es) = Right st
+  where gf = getsFrom (es !!! n)
+        gf2 = getsFrom (es !!! gf)
+ruHd n is !st@(es, _) | (isWaiting gf es) =
+                        -- trace "DaLoop"$
+                     case ruHd gf is st of
+                       Left nst -> ruHd n is $ eP is gf nst
+                       Right bst -> Right bst
+  where gf = getsFrom (es !!! n)
+        gf2 = getsFrom (es !!! gf)
+ruHd n is !st@(es, _) =
+  -- traceShow ("lastc", n, gf) $
+  ruHd n is $ eP is gf st
+  where gf = getsFrom (es !!! n)
 
 initPidEnv :: Int -> Env
 initPidEnv pid = initEnv {env = M.singleton (ord 'p') pid, pid = pid}
 
 initProgramEnvs :: Array Int Env
 initProgramEnvs = toArr $ map initPidEnv [0,1]
+
+initProgramState :: State
+initProgramState = ((pid0,pid1,pidObs), (Sq.empty, Sq.empty, Sq.empty))
 
 
 test2 = "snd 1\n\
@@ -180,11 +267,13 @@ test2 = "snd 1\n\
         \rcv c\n\
         \rcv d"
 
-getAnswer :: Array Int Env -> Int
-getAnswer envs = sent $ (envs ! 1)
+pt2 = (map (read @Ins . trim ) . lines) test2
+
+getAnswer :: State -> Int
+getAnswer (es, _)  = sent $ (es !!! 1)
 main :: IO ()
 main = main2
 mainTest = flip runProgramTillRecv initEnv . toArr  .  map (read @Ins . trim) . lines <$> return testInp >>= print
 main1 = flip runProgramTillRecv initEnv . toArr  .  map (read @Ins . trim) <$> readInput >>= print
-main2 = getAnswer <$> flip runPrograms initProgramEnvs . toArr  .  map (read @Ins . trim) <$> readInput >>= print
-mainTest2 = flip runPrograms initProgramEnvs . toArr  .  map (read @Ins . trim) . lines <$> return test2 >>= print
+main2 = getAnswer <$> flip runPrograms initProgramState . toArr  .  map (read @Ins . trim) <$> readInput >>= print
+mainTest2 = (id &&& getAnswer) <$> flip runPrograms initProgramState . toArr  .  map (read @Ins . trim) . lines <$> return test2 >>= print
